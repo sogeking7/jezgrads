@@ -8,7 +8,8 @@ import type {
 } from './models'
 
 const app = new Hono()
-const db = new SQL('file://./db/app.db')
+const dbPath = process.env.DB_PATH ?? './db/app.db'
+const db = new SQL(`file://${dbPath}`)
 
 app.get('/', (c) => {
   return c.text('Hello Hono!')
