@@ -1,0 +1,21 @@
+{
+  "name": "jezgrads",
+  "scripts": {
+    "dev": "bun run --hot src/index.ts",
+    "check:db": "node -e \"const fs=require('fs');const p='db/app.db';if(!fs.existsSync(p)){console.error('Missing db/app.db');process.exit(1);}console.log('db/app.db OK');\"",
+    "build": "bun build src/index.ts --outdir dist --target bun",
+    "start": "bun run check:db && bun run dist/index.js"
+  },
+  "dependencies": {
+    "hono": "^4.11.8"
+  },
+  "devDependencies": {
+    "@types/bun": "latest"
+  },
+  "module": "src/index.ts",
+  "type": "module",
+  "private": true,
+  "peerDependencies": {
+    "typescript": "^5"
+  }
+}
