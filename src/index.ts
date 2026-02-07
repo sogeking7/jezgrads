@@ -18,9 +18,43 @@ app.get('/', (c) => {
 app.post('/webhook', async (c) => {
   const body = await c.req.parseBody()
   const raw = body as Record<string, string>
+  const expectedSecret = process.env.SECRET
+
+  if (!expectedSecret) {
+    return c.json(
+      {
+        ok: false,
+        error: 'Server misconfiguration: SECRET is not set',
+      },
+      500
+    )
+  }
 
   const rawKeys = Object.keys(raw)
-  if (rawKeys.length === 1 && rawKeys[0] === 'test') {
+  const isTestPayload =
+    rawKeys.includes('test') && rawKeys.every((key) => key === 'test' || key === 'SECRET')
+
+  if (isTestPayload) {
+    if (!raw.SECRET) {
+      return c.json(
+        {
+          ok: false,
+          error: 'Missing secret',
+        },
+        400
+      )
+    }
+
+    if (raw.SECRET !== expectedSecret) {
+      return c.json(
+        {
+          ok: false,
+          error: 'Invalid secret',
+        },
+        401
+      )
+    }
+
     return c.text('OK')
   }
 
@@ -44,17 +78,6 @@ app.post('/webhook', async (c) => {
         error: `Missing fields: ${missing.join(', ')}`,
       },
       400
-    )
-  }
-
-  const expectedSecret = process.env.SECRET
-  if (!expectedSecret) {
-    return c.json(
-      {
-        ok: false,
-        error: 'Server misconfiguration: SECRET is not set',
-      },
-      500
     )
   }
 
