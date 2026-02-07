@@ -10,6 +10,7 @@ import type {
 const app = new Hono()
 const dbPath = process.env.DB_PATH ?? './db/app.db'
 const db = new SQL(`file://${dbPath}`)
+console.info('[app] Database initialized', { dbPath })
 
 app.get('/', (c) => {
   return c.text('Hello Hono!')
@@ -19,8 +20,10 @@ app.post('/webhook', async (c) => {
   const body = await c.req.parseBody()
   const raw = body as Record<string, string>
   const expectedSecret = process.env.SECRET
+  console.info('[webhook] Incoming request', { keys: Object.keys(raw) })
 
   if (!expectedSecret) {
+    console.error('[webhook] SECRET is not set')
     return c.json(
       {
         ok: false,
@@ -35,7 +38,9 @@ app.post('/webhook', async (c) => {
     rawKeys.includes('test') && rawKeys.every((key) => key === 'test' || key === 'SECRET')
 
   if (isTestPayload) {
+    console.info('[webhook] Test payload detected')
     if (!raw.SECRET) {
+      console.warn('[webhook] Missing secret in test payload')
       return c.json(
         {
           ok: false,
@@ -46,6 +51,7 @@ app.post('/webhook', async (c) => {
     }
 
     if (raw.SECRET !== expectedSecret) {
+      console.warn('[webhook] Invalid secret in test payload')
       return c.json(
         {
           ok: false,
@@ -72,6 +78,7 @@ app.post('/webhook', async (c) => {
 
   const missing = requiredFields.filter((key) => !raw[key])
   if (missing.length > 0) {
+    console.warn('[webhook] Missing required fields', { missing })
     return c.json(
       {
         ok: false,
@@ -82,6 +89,7 @@ app.post('/webhook', async (c) => {
   }
 
   if (raw.SECRET !== expectedSecret) {
+    console.warn('[webhook] Invalid secret')
     return c.json(
       {
         ok: false,
@@ -95,6 +103,7 @@ app.post('/webhook', async (c) => {
   try {
     payment = JSON.parse(raw.payment) as TildaPaymentModel
   } catch {
+    console.warn('[webhook] Invalid payment JSON')
     return c.json(
       {
         ok: false,
@@ -117,6 +126,7 @@ app.post('/webhook', async (c) => {
 
   const graduationYear = Number(raw.graduation_year)
   if (!Number.isFinite(graduationYear)) {
+    console.warn('[webhook] Invalid graduation_year', { value: raw.graduation_year })
     return c.json(
       {
         ok: false,
@@ -135,6 +145,7 @@ app.post('/webhook', async (c) => {
   }
 
   if (user.phone.length === 0) {
+    console.warn('[webhook] Invalid phone')
     return c.json(
       {
         ok: false,
@@ -149,6 +160,7 @@ app.post('/webhook', async (c) => {
       insert into users (first_name, last_name, email, graduation_year, phone)
       values (${user.first_name}, ${user.last_name}, ${user.email}, ${user.graduation_year}, ${user.phone}) returning id
     `);
+    console.info('[webhook] User created', { userId: rows[0].id, email: user.email })
 
     return c.json({
       ok: true,
@@ -161,6 +173,7 @@ app.post('/webhook', async (c) => {
   } catch (error) {
     const err = error as { code?: string; message?: string }
     if (err.code === 'SQLITE_CONSTRAINT' || err.code === 'SQLITE_CONSTRAINT_UNIQUE') {
+      console.warn('[webhook] Duplicate user', { email: user.email })
       return c.json(
         {
           ok: false,
@@ -170,6 +183,7 @@ app.post('/webhook', async (c) => {
       )
     }
 
+    console.error('[webhook] Database error', { code: err.code, message: err.message })
     return c.json(
       {
         ok: false,
