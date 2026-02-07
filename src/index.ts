@@ -1,26 +1,256 @@
 import { SQL } from 'bun'
 import { Hono } from 'hono'
+import { HTTPException } from 'hono/http-exception';
 import type {
+  TipTopPaySubscription,
   TildaPaymentModel,
   TildaWebhookFormRawModel,
   TildaWebhookModel,
   UserCreateModel,
+  UserModel,
 } from './models'
+import { fetchSubscriptionsCSV, loginToTipTopPay, parseSubscriptionsCSV } from "./tiptoppay";
 
 const app = new Hono()
 const dbPath = process.env.DB_PATH ?? './db/app.db'
 const db = new SQL(`file://${dbPath}`)
-console.info('[app] Database initialized', { dbPath })
+console.info('[app] Database initialized', {dbPath})
 
 app.get('/', (c) => {
   return c.text('Hello Hono!')
 })
 
+app.get('/favicon.ico', (c) => {
+  const faviconFile = Bun.file(new URL('../favicon.ico', import.meta.url))
+  return c.body(faviconFile, 200, {
+    'Content-Type': 'image/x-icon',
+    'Cache-Control': 'public, max-age=86400',
+  })
+})
+
+function escapeHtml(value: string): string {
+  return value;
+}
+
+function getStatusClass(status: string): string {
+  switch (status) {
+    case 'Активна':
+      return 'status-active'
+    case 'Просрочена':
+      return 'status-pastdue'
+    case 'Отменена':
+      return 'status-cancelled'
+    case 'Отклонена':
+      return 'status-rejected'
+    case 'Завершена':
+      return 'status-expired'
+    default:
+      return 'status-unknown'
+  }
+}
+
+app.get('/report', async (c) => {
+  try {
+    const users: UserModel[] = await db`
+      select id, first_name, last_name, phone, graduation_year, email
+      from users
+      order by graduation_year asc, last_name asc, first_name asc
+    `;
+
+    const cookies = await loginToTipTopPay();
+    const csvData = await fetchSubscriptionsCSV(cookies.cookies);
+    const subscriptions = parseSubscriptionsCSV(csvData);
+
+    const subscriptionsByEmail = new Map<string, TipTopPaySubscription[]>();
+    for (const sub of subscriptions) {
+      const email = sub.email.trim().toLowerCase();
+      const existing = subscriptionsByEmail.get(email);
+      if (existing) {
+        existing.push(sub);
+      } else {
+        subscriptionsByEmail.set(email, [sub]);
+      }
+    }
+
+    const usersByYear = new Map<number, { user: UserModel; subscriptions: TipTopPaySubscription[] }[]>();
+    for (const user of users) {
+      const email = user.email.trim().toLowerCase();
+      const joinedSubscriptions = subscriptionsByEmail.get(email) ?? [];
+      const row = {user, subscriptions: joinedSubscriptions};
+      const existing = usersByYear.get(user.graduation_year);
+      if (existing) {
+        existing.push(row);
+      } else {
+        usersByYear.set(user.graduation_year, [row]);
+      }
+    }
+
+    const graduationYears = Array.from(usersByYear.keys()).sort((a, b) => a - b);
+    const sections = graduationYears
+      .map((year) => {
+        const rows = usersByYear.get(year) ?? [];
+        const rowsHtml = rows
+          .map(({user, subscriptions: userSubscriptions}) => {
+            const summary = userSubscriptions.length === 0
+              ? '-'
+              : userSubscriptions
+                .map((sub) => {
+                  const statusClass = getStatusClass(sub.status)
+                  const lastPayment = sub.lastPaymentDate?.trim() ? escapeHtml(sub.lastPaymentDate) : '-'
+                  const nextPayment = sub.nextPaymentDate?.trim() ? escapeHtml(sub.nextPaymentDate) : '-'
+                  const paymentCount = sub.paymentCount?.trim() ? escapeHtml(sub.paymentCount) : '-'
+                  return `<span class="${statusClass}">${escapeHtml(sub.status)}</span> (${escapeHtml(sub.amount)} ${escapeHtml(sub.currency)}) | Count: ${paymentCount} | Last: ${lastPayment} | Next: ${nextPayment}`
+                })
+                .join('<br>');
+
+            return `
+              <tr>
+                <td>${user.id}</td>
+                <td>${escapeHtml(`${user.first_name} ${user.last_name}`)}</td>
+                <td>${escapeHtml(user.email)}</td>
+                <td>${escapeHtml(user.phone)}</td>
+                <td>${userSubscriptions.length}</td>
+                <td>${summary}</td>
+              </tr>
+            `;
+          })
+          .join('');
+
+        return `
+          <h2>Graduation year: ${year}</h2>
+          <div class="table-scroll">
+            <table>
+              <thead>
+                <tr>
+                  <th>ID</th>
+                  <th>Name</th>
+                  <th>Email</th>
+                  <th>Phone</th>
+                  <th>Subscriptions</th>
+                  <th>Subscription details</th>
+                </tr>
+              </thead>
+              <tbody>${rowsHtml}</tbody>
+            </table>
+          </div>
+        `;
+      })
+      .join('');
+
+    const html = `
+      <!DOCTYPE html>
+      <html lang="en">
+        <head>
+          <meta charset="UTF-8" />
+          <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+          <link rel="icon" href="/favicon.ico" sizes="any" />
+          <title>Jezgrads - Subscription</title>
+          <style>
+            @import url('https://fonts.googleapis.com/css2?family=Geist+Mono:wght@400;500;600;700&display=swap');
+            body { font-family: 'Geist Mono', ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, 'Liberation Mono', 'Courier New', monospace; margin: 24px; color: #222; }
+            h1 { margin-bottom: 4px; }
+            h2 { margin: 24px 0 8px; }
+            .table-scroll { width: 100%; overflow-x: auto; margin-bottom: 16px; }
+            table { width: 100%; min-width: 920px; border-collapse: collapse; margin-bottom: 0; }
+            th, td { border: 1px solid #ddd; padding: 10px; text-align: left; vertical-align: top; line-height: 1.45; white-space: nowrap; }
+            th { background: #f5f5f5; }
+            td { word-break: normal; overflow-wrap: normal; }
+            .status-active { color: #0b7a24; font-weight: 600; }
+            .status-pastdue { color: #b26a00; font-weight: 600; }
+            .status-cancelled { color: #7a1f1f; font-weight: 600; }
+            .status-rejected { color: #d10000; font-weight: 700; }
+            .status-expired { color: #555; font-weight: 600; }
+            .status-unknown { color: #333; font-weight: 600; }
+
+            @media (max-width: 1024px) {
+              body { margin: 16px; font-size: 14px; }
+              th, td { padding: 7px; line-height: 1.35; }
+              td { word-break: break-word; }
+            }
+
+            @media (max-width: 768px) {
+              body { margin: 12px; font-size: 13px; }
+              h1 { font-size: 20px; }
+              h2 { font-size: 16px; margin-top: 16px; }
+              th, td { padding: 6px; }
+            }
+
+            @media (max-width: 480px) {
+              body { margin: 10px; font-size: 12px; }
+              h1 { font-size: 18px; }
+              h2 { font-size: 15px; }
+              th, td { padding: 5px; }
+            }
+          </style>
+        </head>
+        <body>
+          <h1>Jezgrads - Subscriptions</h1>
+          <p>Total users: ${users.length}. Total subscriptions: ${subscriptions.length}.</p>
+          <h2>Subscription statuses</h2>
+          <div class="table-scroll">
+            <table>
+              <thead>
+                <tr>
+                  <th>Status</th>
+                  <th>Description</th>
+                  <th>When applied</th>
+                  <th>Possible actions</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr>
+                  <td>Active</td>
+                  <td>Подписка активна</td>
+                  <td>После создания и очередной успешной оплаты</td>
+                  <td>Отмена</td>
+                </tr>
+                <tr>
+                  <td>PastDue</td>
+                  <td>Просрочена</td>
+                  <td>После одной или двух подряд неуспешных попыток оплаты</td>
+                  <td>Отмена</td>
+                </tr>
+                <tr>
+                  <td>Cancelled</td>
+                  <td>Отменена</td>
+                  <td>В случае отмены по запросу</td>
+                  <td>Нет</td>
+                </tr>
+                <tr>
+                  <td>Rejected</td>
+                  <td>Отклонена</td>
+                  <td>В случае трех неудачных попыток оплаты, идущих подряд</td>
+                  <td>Нет</td>
+                </tr>
+                <tr>
+                  <td>Expired</td>
+                  <td>Завершена</td>
+                  <td>В случае завершения максимального количества периодов (если были указаны)</td>
+                  <td>Нет</td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+          ${sections || '<p>No users found.</p>'}
+        </body>
+      </html>
+    `;
+
+    return c.html(html);
+  } catch (error) {
+    console.error('Error fetching/parsing subscriptions:', error);
+    throw new HTTPException(500, {
+      message: 'Failed to retrieve and parse subscriptions',
+    });
+  }
+});
+
+
 app.post('/webhook', async (c) => {
   const body = await c.req.parseBody()
   const raw = body as Record<string, string>
   const expectedSecret = process.env.SECRET
-  console.info('[webhook] Incoming request', { keys: Object.keys(raw) })
+  console.info('[webhook] Incoming request', {keys: Object.keys(raw)})
 
   if (!expectedSecret) {
     console.error('[webhook] SECRET is not set')
@@ -78,7 +308,7 @@ app.post('/webhook', async (c) => {
 
   const missing = requiredFields.filter((key) => !raw[key])
   if (missing.length > 0) {
-    console.warn('[webhook] Missing required fields', { missing })
+    console.warn('[webhook] Missing required fields', {missing})
     return c.json(
       {
         ok: false,
@@ -126,7 +356,7 @@ app.post('/webhook', async (c) => {
 
   const graduationYear = Number(raw.graduation_year)
   if (!Number.isFinite(graduationYear)) {
-    console.warn('[webhook] Invalid graduation_year', { value: raw.graduation_year })
+    console.warn('[webhook] Invalid graduation_year', {value: raw.graduation_year})
     return c.json(
       {
         ok: false,
@@ -160,7 +390,7 @@ app.post('/webhook', async (c) => {
       insert into users (first_name, last_name, email, graduation_year, phone)
       values (${user.first_name}, ${user.last_name}, ${user.email}, ${user.graduation_year}, ${user.phone}) returning id
     `);
-    console.info('[webhook] User created', { userId: rows[0].id, email: user.email })
+    console.info('[webhook] User created', {userId: rows[0].id, email: user.email})
 
     return c.json({
       ok: true,
@@ -173,7 +403,7 @@ app.post('/webhook', async (c) => {
   } catch (error) {
     const err = error as { code?: string; message?: string }
     if (err.code === 'SQLITE_CONSTRAINT' || err.code === 'SQLITE_CONSTRAINT_UNIQUE') {
-      console.warn('[webhook] Duplicate user', { email: user.email })
+      console.warn('[webhook] Duplicate user', {email: user.email})
       return c.json(
         {
           ok: false,
@@ -183,7 +413,7 @@ app.post('/webhook', async (c) => {
       )
     }
 
-    console.error('[webhook] Database error', { code: err.code, message: err.message })
+    console.error('[webhook] Database error', {code: err.code, message: err.message})
     return c.json(
       {
         ok: false,

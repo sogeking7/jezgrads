@@ -30,3 +30,24 @@ export type TildaWebhookFormRawModel = {
 export type TildaWebhookModel = Omit<TildaWebhookFormRawModel, 'payment' | 'SECRET'> & {
     payment: TildaPaymentModel;
 };
+
+export type TipTopPayLoginRequest = {
+  login: string;
+  password: string;
+}
+
+export type TipTopPaySubscription = {
+  id: string;
+  createdAt: string;
+  status: string;
+  amount: string;
+  currency: string;
+  frequency: string;
+  description: string;
+  payerId: string;
+  email: string;
+  paymentCount: string;
+  lastPaymentDate: string;
+  nextPaymentDate: string;
+  nextPaymentParsed?: Date;
+}
