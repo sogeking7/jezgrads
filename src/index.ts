@@ -19,6 +19,11 @@ app.post('/webhook', async (c) => {
   const body = await c.req.parseBody()
   const raw = body as Record<string, string>
 
+  const rawKeys = Object.keys(raw)
+  if (rawKeys.length === 1 && rawKeys[0] === 'test') {
+    return c.text('OK')
+  }
+
   const requiredFields: (keyof TildaWebhookFormRawModel)[] = [
     'SECRET',
     'email',
