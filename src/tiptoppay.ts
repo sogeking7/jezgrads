@@ -1,14 +1,14 @@
 import { TipTopPayLoginRequest, TipTopPaySubscription } from "./models";
 
-export async function loginToTipTopPay(): Promise<{ cookies: string[] }> {
+export async function loginToTipTopPay(credentials?: TipTopPayLoginRequest): Promise<{ cookies: string[] }> {
   const loginURL = 'https://id.tiptoppay.kz/api/login';
 
-  const credentials: TipTopPayLoginRequest = {
-    login: process.env.TIPTOPPAY_LOGIN ?? '',
-    password: process.env.TIPTOPPAY_PASSWORD ?? '',
+  const loginRequest: TipTopPayLoginRequest = {
+    login: credentials?.login ?? process.env.TIPTOPPAY_LOGIN ?? '',
+    password: credentials?.password ?? process.env.TIPTOPPAY_PASSWORD ?? '',
   };
 
-  console.log('Attempting login to TipTopPay with payload:', JSON.stringify(credentials));
+  console.log('Attempting login to TipTopPay with login:', loginRequest.login);
 
   try {
     const response = await fetch(loginURL, {
@@ -17,7 +17,7 @@ export async function loginToTipTopPay(): Promise<{ cookies: string[] }> {
         'Content-Type': 'application/json',
         'Accept': 'application/json',
       },
-      body: JSON.stringify(credentials),
+      body: JSON.stringify(loginRequest),
     });
 
     const body = await response.text();
